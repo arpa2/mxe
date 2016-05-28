@@ -155,8 +155,15 @@ endef
 PRELOAD_VARS := LD_PRELOAD DYLD_FORCE_FLAT_NAMESPACE DYLD_INSERT_LIBRARIES
 
 # use a minimal whitelist of safe environment variables
-# HOME is needed for ~/.gitconfig for patch-tool-mxe
-ENV_WHITELIST := PATH HOME LANG MAKE% MXE% %PROXY %proxy LD_LIBRARY_PATH $(PRELOAD_VARS) ACLOCAL_PATH
+# basic working shell environment and mxe variables
+# see http://www.linuxfromscratch.org/lfs/view/stable/chapter04/settingenvironment.html
+ENV_WHITELIST := EDITOR HOME LANG PATH %PROXY %proxy PS1 TERM
+ENV_WHITELIST += MAKE% MXE% $(PRELOAD_VARS)
+
+# OS/Distro related issues - "unsafe" but practical
+# 1. https://github.com/mxe/mxe/issues/697
+ENV_WHITELIST += ACLOCAL_PATH LD_LIBRARY_PATH
+
 unexport $(filter-out $(ENV_WHITELIST),$(shell env | cut -d '=' -f1))
 
 # disable wine with readonly directory (created by mxe-conf)
@@ -314,6 +321,10 @@ LOOKUP_PKG_RULE = $(strip \
 .PHONY: all
 all: all-filtered
 
+# Build native requirements for certain systems
+OS_SHORT_NAME   := $(call lc,$(shell lsb_release -sc 2>/dev/null || uname -s))
+MXE_PLUGIN_DIRS += $(realpath $(TOP_DIR)/plugins/native/$(OS_SHORT_NAME))
+
 .PHONY: check-requirements
 define CHECK_REQUIREMENT
     @if ! $(1) --help &>/dev/null; then \
@@ -456,6 +467,10 @@ $(NONET_LIB): $(TOP_DIR)/tools/nonetwork.c | $(PREFIX)/$(BUILD)/lib/.gitkeep
 	@echo '[build nonetwork lib]'
 	@$(BUILD_CC) -shared -fPIC $(NONET_CFLAGS) -o $@ $<
 
+.PHONY: shell
+shell: $(NONET_LIB)
+	$(PRELOAD) $(SHELL)
+
 define PKG_TARGET_RULE
 .PHONY: $(1)
 $(1): $(PREFIX)/$(3)/installed/$(1)
@@ -513,6 +528,8 @@ build-only-$(1)_$(3):
 	    lsb_release -a 2>/dev/null || sw_vers 2>/dev/null || true
 	    autoconf --version 2>/dev/null | head -1
 	    automake --version 2>/dev/null | head -1
+	    $(BUILD_CC) --version
+	    $(BUILD_CXX) --version
 	    python --version
 	    perl --version 2>&1 | head -3
 	    rm -rf   '$(2)'
@@ -616,7 +633,7 @@ BUILD_PKG_TMP_FILES := *-*.list mxe-*.tar.xz mxe-*.deb* wheezy jessie
 
 .PHONY: clean
 clean:
-	-chmod 0755 "$$WINEPREFIX"
+	@[ -d "$$WINEPREFIX" ] && chmod 0755 "$$WINEPREFIX" || true
 	rm -rf $(call TMP_DIR,*) $(PREFIX) \
 	       $(addprefix $(TOP_DIR)/, $(BUILD_PKG_TMP_FILES))
 
@@ -697,7 +714,7 @@ cleanup-deps-style:
 	     || echo '*** Multi-line deps are mangled ***' && comm -3 tmp-$@-pre tmp-$@-post
 	@rm -f $(TOP_DIR)/tmp-$@-*
 
-build-matrix.html: $(foreach PKG,$(PKGS), $(TOP_DIR)/src/$(PKG).mk)
+build-matrix.html: $(foreach 1,$(PKGS),$(PKG_MAKEFILES))
 	@echo '<!DOCTYPE html>'                  > $@
 	@echo '<html>'                          >> $@
 	@echo '<head>'                          >> $@
